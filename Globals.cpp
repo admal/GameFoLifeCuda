@@ -1,7 +1,7 @@
 #include <builtin_types.h>
 #include <GL/glew.h>
-extern const unsigned int world_width = 450;
-extern const unsigned int world_height = 450;
+//extern unsigned int world_width = 1000;
+//extern const unsigned int world_height = 1000;
 
 // Starting position and scale
 extern double xOff = -0.5;

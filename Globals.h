@@ -3,10 +3,11 @@
 
 #define MAX_ITER 20
 #define THREADS_PER_BLOCK 900
-#define FPS 2
+#define FPS 5
+#define SCREEN_COVERAGE 10 //percent of screen covered by living cells
 // constants
-extern const unsigned int world_width;
-extern const unsigned int world_height;
+//extern const unsigned int world_width;
+//extern const unsigned int world_height;
 
 // Starting position and scale
 extern double xOff;
