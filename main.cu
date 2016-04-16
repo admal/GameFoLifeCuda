@@ -87,6 +87,7 @@ unsigned int world_height;
 int *cells;
 int *d_ocells;
 int *d_icells;
+int *d_syncBlock;
 struct uchar4 *d_dst;
 
 //TMP
@@ -111,7 +112,7 @@ void randomMap(int *i_cells, int width, int height)
 	}
 }
 
-void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst);
+void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst, int*);
 
 ////////////////////////////////////////////////////////////////////////////////
 //OPENGL FUNCTIONS
@@ -136,7 +137,7 @@ void displayFunc(void)
 
 	cudaGLMapBufferObject((void**)&d_dst, gl_PBO);
 
-	RunGameOfLifeKernel(d_icells, d_ocells, world_width, world_height, d_dst);
+	RunGameOfLifeKernel(d_icells, d_ocells, world_width, world_height, d_dst, d_syncBlock);
 
 	cudaGLUnmapBufferObject(gl_PBO);
 
@@ -241,11 +242,11 @@ __device__ int CountAliveCells(int *i_cells, int idx, int width, int height)
 
 			if (currPosX < 0)
 			{
-				currPosX = width + currPosX - 1;
+				currPosX = width + currPosX;
 			}
 			if (currPosY < 0)
 			{
-				currPosY = height + currPosY - 1;
+				currPosY = height + currPosY;
 			}
 
 			int neigh = currPosY * width + currPosX;
@@ -261,45 +262,71 @@ __device__ int CountAliveCells(int *i_cells, int idx, int width, int height)
 	}
 	return alive;
 }
-
-__global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int height, uchar4 *dst)
+__global__ void UpdateGrid(int *i_cells, int *o_cells, uchar4 *dst)
 {
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
+	i_cells[idx] = o_cells[idx];
+	if (idx == 0)
+		printf("\n\n");
+	//assign color
+	dst[idx].x = i_cells[idx] * 255;
+	dst[idx].y = i_cells[idx] * 255;
+	dst[idx].z = i_cells[idx] * 255;
+}
+
+__global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int height, uchar4 *dst, int* syncedBlocks)
+{
+	int idx = blockDim.x * blockIdx.x + threadIdx.x;
+	
+	if (idx == 0)
+		printf("w: %i, h: %i\n", width, height);
+
+	if (idx == (width*height - 1) || idx == ((height - 1)*width))
+		printf("Idx: %i;val: %i; \n", idx, i_cells[idx]);
+
 	if (idx >= width*height)
 		return;
-	if (idx == 24)
-	{
-		printf("24 cell started...\n");
-		printf("init: %i\n", i_cells[idx]);
-		printf("Idx: %i;Neigh: %i; \n", idx, CountAliveCells(i_cells, idx, width, height));
-	}
 
-	if (CountAliveCells(i_cells, idx,width,height) == 3|| 
-		(CountAliveCells(i_cells, idx,width,height) == 2 && i_cells[idx]==1))
+	int neighCount = CountAliveCells(i_cells, idx, width, height);
+
+
+	if (neighCount == 3|| 
+		(neighCount == 2 && i_cells[idx]==1))
 		o_cells[idx] = 1;
 	else
 		o_cells[idx] = 0;
 	
 	__syncthreads();
-	i_cells[idx] = o_cells[idx];
+
+	if (1 == i_cells[idx])
+	{
+		//printf("%i cell started...\n",idx);
+		//printf("init: %i\n", i_cells[idx]);
+		printf("Idx: %i;Neigh: %i; \n", idx, neighCount);
+	}
 	
-	//assign color
-	dst[idx].x = i_cells[idx] * 255;
-	dst[idx].y = i_cells[idx] * 255;
-	dst[idx].z = i_cells[idx] * 255;
+
+	//i_cells[idx] = o_cells[idx];
+	//
+	////assign color
+	//dst[idx].x = i_cells[idx] * 255;
+	//dst[idx].y = i_cells[idx] * 255;
+	//dst[idx].z = i_cells[idx] * 255;
 	//if (idx == 24)
 	//	printf("color: %i\n", dst[idx].x);
 }
 
 //end gpu functions
 
-void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst)
+void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst, int* syncedBlocks)
 {
 	int size = width*height;
 	dim3 threads(THREADS_PER_BLOCK, 1, 1);
-	dim3 blocks(ceil(size / THREADS_PER_BLOCK), 1, 1);
-
-	CalcNextGeneration<<<blocks, threads >>>(i_cells, o_cells, width, height, dst);
+	dim3 blocks(ceil(((float)size) / (float)(THREADS_PER_BLOCK)), 1, 1);
+	//printf("numofBlocks: %i\n", blocks.x);
+	CalcNextGeneration<<<blocks, threads >>>(i_cells, o_cells, width, height, dst, syncedBlocks);
+	gpuErrchk(cudaGetLastError());
+	UpdateGrid << <blocks, threads >> >(i_cells, o_cells, dst);
 	gpuErrchk(cudaGetLastError());
 }
 
@@ -326,19 +353,19 @@ void initWorld(int gridWidth, int gridHeight, char* filename)
 
 	cells = (int*)calloc(world_width*world_height, sizeof(int));
 	printCells(grid, gridWidth,gridHeight);
-	int offsetX = 0;// world_height / 2 - gridHeight / 2;
-	int offsetY = 0;// world_width / 2 - gridWidth / 2;
+	int offsetX = 0;// world_height - gridHeight - 1;//  world_height / 2 - gridHeight / 2;
+	int offsetY = 0;// world_width - gridWidth - 1;// world_width / 2 - gridWidth / 2;
 
-	for (int i = 0; i < gridWidth; i++)
+
+	for (int i = 0; i < gridHeight; i++)
 	{
-		for (int j = 0; j < gridHeight; j++)
+		for (int j = 0; j < gridWidth; j++)
 		{
-			int posX = offsetX + i;
-			int posY = offsetY + j;
+			int posX = (offsetX + i)%world_width;
+			int posY = (offsetY + j)%world_height;
 			cells[posX*world_width + posY] = grid[i*gridWidth + j];
 		}
 	}
-
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -360,16 +387,13 @@ int main(int argc, char **argv)
 		{
 			world_width = atoi(argv[2]);
 			world_height = atoi(argv[3]);
-
 			if (world_width < 5 || world_height < 5)
 			{
-				printf("Error line 356\n");
 				usage(argv[0]);
 			}
 		}
 		else
 		{
-			printf("Error line 362\n");
 			usage(argv[0]);
 		}
 	case 1: //init random map whether with initial size or with default
@@ -383,16 +407,23 @@ int main(int argc, char **argv)
 		gridWidth = atoi(argv[5]);
 		gridHeight = atoi(argv[6]);
 		size = world_height * world_width;
+		printf("w: %i, h: %i\n", world_width, world_height);
 		initWorld(gridWidth, gridHeight, argv[7]);
 		break;
 	default:
 		usage(argv[0]);
 		break;
 	}
+	int s = 0;
+	int* h_syncedBlocks = &s;
 
 	gpuErrchk(cudaMalloc(&d_icells, size * sizeof(int)));
 	gpuErrchk(cudaMalloc(&d_ocells, size*sizeof(int)));
+	gpuErrchk(cudaMalloc(&d_syncBlock, sizeof(int)));
+	
 	gpuErrchk(cudaMemcpy(d_icells, cells, size*sizeof(int), cudaMemcpyHostToDevice));
+	gpuErrchk(cudaMemcpy(d_syncBlock, h_syncedBlocks, sizeof(int), cudaMemcpyHostToDevice));
+
 	initGL(&argc, argv);
 	printf("\nStarted\n");	
 
