@@ -68,7 +68,7 @@
 #include "Globals.h"
 #include <time.h>
 #include <thread>
-#include "LoadingFiles.h"
+#include "Helpers.h"
 
 #define gpuErrchk(ans) { gpuAssert((ans), __FILE__, __LINE__); }
 inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort = true)
@@ -89,35 +89,6 @@ int *d_ocells;
 int *d_icells;
 struct uchar4 *d_dst;
 
-//HELPERS
-void printCells(int* cells, int width, int height)
-{
-	int size = width*height;
-	for (int i = 0; i < size; i++)
-	{
-		if (i%width == 0)
-			printf("\n");
-		printf("%i ", cells[i]);
-	}
-	printf("\n");
-}
-
-void randomMap(int *i_cells, int width, int height)
-{
-	srand(time(NULL));
-	for (int i = 0; i < width*height; i++)
-	{
-		i_cells[i] = rand()%100 >= (100 -SCREEN_COVERAGE) ? 1 : 0;
-	}
-}
-//end helpers
-
-void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst);
-
-////////////////////////////////////////////////////////////////////////////////
-//OPENGL
-////////////////////////////////////////////////////////////////////////////////
-
 #define BUFFER_DATA(i) ((char *)0 + i)
 
 //OpenGL PBO and texture "names"
@@ -126,6 +97,14 @@ GLuint gl_PBO, gl_Tex;
 uchar4 *h_Src;
 //Size of displayed image
 int imageW, imageH;
+
+
+void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst);
+
+
+////////////////////////////////////////////////////////////////////////////////
+//OPENGL FUNCTIONS
+////////////////////////////////////////////////////////////////////////////////
 void displayFunc(void)
 {
 	
@@ -154,6 +133,14 @@ void idleFunc()
 	glutPostRedisplay();
 	std::chrono::milliseconds dur(1000 / FPS);
 	std::this_thread::sleep_for(dur);
+}
+void closeFunc()
+{
+	gpuErrchk(cudaFree(d_ocells));
+	gpuErrchk(cudaFree(d_icells));
+	free(h_Src);
+	free(cells);
+	printf("Closed\n");
 }
 
 bool initGL(int *argc, char **argv)
@@ -202,6 +189,7 @@ bool initGL(int *argc, char **argv)
 
 	glutDisplayFunc(displayFunc);
 	glutIdleFunc(idleFunc);
+	glutCloseFunc(closeFunc);
 	return true;
 }//initgl
 
@@ -260,12 +248,6 @@ __global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int he
 {
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
-	if (idx == 0)
-		printf("w: %i, h: %i\n", width, height);
-
-	if (idx == (width*height - 1) || idx == ((height - 1)*width))
-		printf("Idx: %i;val: %i; \n", idx, i_cells[idx]);
-
 	if (idx >= width*height)
 		return;
 
@@ -280,10 +262,6 @@ __global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int he
 
 	__syncthreads();
 
-	if (1 == i_cells[idx])
-	{
-		printf("Idx: %i;Neigh: %i; \n", idx, neighCount);
-	}
 }
 //end gpu functions
 
@@ -298,40 +276,33 @@ void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, ucha
 	gpuErrchk(cudaGetLastError());
 }
 
-void usage(char* name)
-{
-	fprintf(stderr, "%s [-w worldW worldH [-f width height filename]]\n", name);
-	fprintf(stderr, "worldW - world width, worldH - world height \n");
-	fprintf(stderr, "width, height - dimensions of initial the grid (not of world!)\n");
-	fprintf(stderr, "filename - name of provided initial part of world\n");
-	exit(EXIT_FAILURE);
-}
-
 void initWorld(int gridWidth, int gridHeight, char* filename)
 {
 	int *grid = (int*)malloc(gridWidth*gridHeight * sizeof(int));
 
-	if ( LoadGridFromFile(gridWidth, gridHeight, grid, filename) == 1)
+	if (LoadGridFromFile(gridWidth, gridHeight, grid, filename) == 1)
 	{
 		printf("Error occured!\n Not proper data in file: %s", filename);
 		exit(EXIT_FAILURE);
 	}
 
 	cells = (int*)calloc(world_width*world_height, sizeof(int));
-	printCells(grid, gridWidth,gridHeight);
-	int offsetX =  world_height / 2 - gridHeight / 2;
-	int offsetY =  world_width / 2 - gridWidth / 2;
+	//printCells(grid, gridWidth, gridHeight);
+	int offsetX = world_height / 2 - gridHeight / 2;
+	int offsetY = world_width / 2 - gridWidth / 2;
 
 	for (int i = 0; i < gridHeight; i++)
 	{
 		for (int j = 0; j < gridWidth; j++)
 		{
-			int posX = (offsetX + i)%world_width;
-			int posY = (offsetY + j)%world_height;
+			int posX = (offsetX + i) % world_width;
+			int posY = (offsetY + j) % world_height;
 			cells[posX*world_width + posY] = grid[i*gridWidth + j];
 		}
 	}
 }
+
+
 
 ////////////////////////////////////////////////////////////////////////////////
 // Program main
@@ -339,8 +310,8 @@ void initWorld(int gridWidth, int gridHeight, char* filename)
 int main(int argc, char **argv)
 {	
 	int size;
-	world_width = 1000;
-	world_height = 1000;
+	world_width = 500;
+	world_height = 500;
 	int gridWidth;
 	int gridHeight;
 	switch (argc)
@@ -387,4 +358,5 @@ int main(int argc, char **argv)
 	printf("\nStarted\n");	
 
 	glutMainLoop();
+	printf("Ended\n");
 }
