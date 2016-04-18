@@ -87,10 +87,9 @@ unsigned int world_height;
 int *cells;
 int *d_ocells;
 int *d_icells;
-int *d_syncBlock;
 struct uchar4 *d_dst;
 
-//TMP
+//HELPERS
 void printCells(int* cells, int width, int height)
 {
 	int size = width*height;
@@ -102,7 +101,7 @@ void printCells(int* cells, int width, int height)
 	}
 	printf("\n");
 }
-//end tmp
+
 void randomMap(int *i_cells, int width, int height)
 {
 	srand(time(NULL));
@@ -111,11 +110,12 @@ void randomMap(int *i_cells, int width, int height)
 		i_cells[i] = rand()%100 >= (100 -SCREEN_COVERAGE) ? 1 : 0;
 	}
 }
+//end helpers
 
-void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst, int*);
+void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst);
 
 ////////////////////////////////////////////////////////////////////////////////
-//OPENGL FUNCTIONS
+//OPENGL
 ////////////////////////////////////////////////////////////////////////////////
 
 #define BUFFER_DATA(i) ((char *)0 + i)
@@ -124,25 +124,18 @@ void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, ucha
 GLuint gl_PBO, gl_Tex;
 //Source image on the host side
 uchar4 *h_Src;
-
-//Original image width and height
+//Size of displayed image
 int imageW, imageH;
-
-// Timer ID
-//unsigned int hTimer;
-
 void displayFunc(void)
 {
+	
 	d_dst = NULL;
 
 	cudaGLMapBufferObject((void**)&d_dst, gl_PBO);
 
-	RunGameOfLifeKernel(d_icells, d_ocells, world_width, world_height, d_dst, d_syncBlock);
+	RunGameOfLifeKernel(d_icells, d_ocells, world_width, world_height, d_dst);
 
 	cudaGLUnmapBufferObject(gl_PBO);
-
-	//glPushMatrix();  //begin scaling
-	//glScalef(10, 10, 10);
 
 	glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, imageW, imageH, GL_RGBA, GL_UNSIGNED_BYTE, BUFFER_DATA(0));
 	glBegin(GL_TRIANGLES);
@@ -153,7 +146,6 @@ void displayFunc(void)
 	glTexCoord2f(0.0f, 2.0f);
 	glVertex2f(-1.0f, 3.0f);
 	glEnd();
-	//glPopMatrix();
 	glutSwapBuffers();
 } // displayFunc
 
@@ -169,12 +161,11 @@ bool initGL(int *argc, char **argv)
 	imageH = world_height;
 	imageW = world_width;
 
-
 	glutInit(argc, argv);
 	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
 	glutInitWindowSize(imageW, imageH);
 	glutCreateWindow(argv[0]);
-	printf("Loading extensions: %s\n", glewGetErrorString(glewInit()));
+	printf("Loading extensions: %s\n", (char*)glewGetErrorString(glewInit()));
 	if (!glewIsSupported(
 		"GL_VERSION_2_0 "
 		"GL_ARB_pixel_buffer_object "
@@ -212,26 +203,21 @@ bool initGL(int *argc, char **argv)
 	glutDisplayFunc(displayFunc);
 	glutIdleFunc(idleFunc);
 	return true;
-}
+}//initgl
 
 //end opengl functions
-
-
 
 
 ///////////////////////////////////////////////////////////////////////////////
 //GPU FUNCTIONS
 ///////////////////////////////////////////////////////////////////////////////
+
 __device__ int CountAliveCells(int *i_cells, int idx, int width, int height)
 {
 	int alive = 0;
 
-	int posY = floorf(idx/width);
-	//int posX = idx - posY*width;
+	int posY = floorf(idx / width);
 	int posX = idx % width;
-
-	//if (idx == 4)
-	//	printf("Idx: 4; x = %i, y = %i;\n", posX, posY);
 
 	for (int i = -1; i <= 1; i++)
 	{
@@ -250,9 +236,6 @@ __device__ int CountAliveCells(int *i_cells, int idx, int width, int height)
 			}
 
 			int neigh = currPosY * width + currPosX;
-			
-			//if (idx == 4)
-			//	printf("neighIdx: %i\n", neigh);
 
 			if (i == 0 && j == 0)
 				continue;
@@ -262,22 +245,21 @@ __device__ int CountAliveCells(int *i_cells, int idx, int width, int height)
 	}
 	return alive;
 }
-__global__ void UpdateGrid(int *i_cells, int *o_cells, uchar4 *dst)
+__global__ void UpdateGrid(int *i_cells, int *o_cells, struct uchar4 *dst)
 {
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
 	i_cells[idx] = o_cells[idx];
-	if (idx == 0)
-		printf("\n\n");
+
 	//assign color
 	dst[idx].x = i_cells[idx] * 255;
 	dst[idx].y = i_cells[idx] * 255;
 	dst[idx].z = i_cells[idx] * 255;
 }
 
-__global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int height, uchar4 *dst, int* syncedBlocks)
+__global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int height, uchar4 *dst)
 {
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
-	
+
 	if (idx == 0)
 		printf("w: %i, h: %i\n", width, height);
 
@@ -290,46 +272,31 @@ __global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int he
 	int neighCount = CountAliveCells(i_cells, idx, width, height);
 
 
-	if (neighCount == 3|| 
-		(neighCount == 2 && i_cells[idx]==1))
+	if (neighCount == 3 ||
+		(neighCount == 2 && i_cells[idx] == 1))
 		o_cells[idx] = 1;
 	else
 		o_cells[idx] = 0;
-	
+
 	__syncthreads();
 
 	if (1 == i_cells[idx])
 	{
-		//printf("%i cell started...\n",idx);
-		//printf("init: %i\n", i_cells[idx]);
 		printf("Idx: %i;Neigh: %i; \n", idx, neighCount);
 	}
-	
-
-	//i_cells[idx] = o_cells[idx];
-	//
-	////assign color
-	//dst[idx].x = i_cells[idx] * 255;
-	//dst[idx].y = i_cells[idx] * 255;
-	//dst[idx].z = i_cells[idx] * 255;
-	//if (idx == 24)
-	//	printf("color: %i\n", dst[idx].x);
 }
-
 //end gpu functions
 
-void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst, int* syncedBlocks)
+void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst)
 {
 	int size = width*height;
 	dim3 threads(THREADS_PER_BLOCK, 1, 1);
 	dim3 blocks(ceil(((float)size) / (float)(THREADS_PER_BLOCK)), 1, 1);
-	//printf("numofBlocks: %i\n", blocks.x);
-	CalcNextGeneration<<<blocks, threads >>>(i_cells, o_cells, width, height, dst, syncedBlocks);
+	CalcNextGeneration<<<blocks, threads >>>(i_cells, o_cells, width, height, dst);
 	gpuErrchk(cudaGetLastError());
 	UpdateGrid << <blocks, threads >> >(i_cells, o_cells, dst);
 	gpuErrchk(cudaGetLastError());
 }
-
 
 void usage(char* name)
 {
@@ -350,12 +317,10 @@ void initWorld(int gridWidth, int gridHeight, char* filename)
 		exit(EXIT_FAILURE);
 	}
 
-
 	cells = (int*)calloc(world_width*world_height, sizeof(int));
 	printCells(grid, gridWidth,gridHeight);
-	int offsetX = 0;// world_height - gridHeight - 1;//  world_height / 2 - gridHeight / 2;
-	int offsetY = 0;// world_width - gridWidth - 1;// world_width / 2 - gridWidth / 2;
-
+	int offsetX =  world_height / 2 - gridHeight / 2;
+	int offsetY =  world_width / 2 - gridWidth / 2;
 
 	for (int i = 0; i < gridHeight; i++)
 	{
@@ -378,11 +343,9 @@ int main(int argc, char **argv)
 	world_height = 1000;
 	int gridWidth;
 	int gridHeight;
-	printf("argc = %i\n", argc);
 	switch (argc)
 	{ 
-	case 4: //random map with provided grid
-		printf("argv[1] = %s\n", argv[1]);
+	case 4: //random map with provided grid dimensions
 		if (strcmp(argv[1], "-w")==0)
 		{
 			world_width = atoi(argv[2]);
@@ -396,7 +359,7 @@ int main(int argc, char **argv)
 		{
 			usage(argv[0]);
 		}
-	case 1: //init random map whether with initial size or with default
+	case 1: //init random map whether with initial size or with default (1000x1000)
 		size = world_height * world_width;
 		cells = (int*)malloc(size* sizeof(int));
 		randomMap(cells, world_width, world_height);
@@ -407,22 +370,18 @@ int main(int argc, char **argv)
 		gridWidth = atoi(argv[5]);
 		gridHeight = atoi(argv[6]);
 		size = world_height * world_width;
-		printf("w: %i, h: %i\n", world_width, world_height);
+
 		initWorld(gridWidth, gridHeight, argv[7]);
 		break;
 	default:
 		usage(argv[0]);
 		break;
 	}
-	int s = 0;
-	int* h_syncedBlocks = &s;
-
+	printf("Cells grid created...\n");
 	gpuErrchk(cudaMalloc(&d_icells, size * sizeof(int)));
 	gpuErrchk(cudaMalloc(&d_ocells, size*sizeof(int)));
-	gpuErrchk(cudaMalloc(&d_syncBlock, sizeof(int)));
 	
 	gpuErrchk(cudaMemcpy(d_icells, cells, size*sizeof(int), cudaMemcpyHostToDevice));
-	gpuErrchk(cudaMemcpy(d_syncBlock, h_syncedBlocks, sizeof(int), cudaMemcpyHostToDevice));
 
 	initGL(&argc, argv);
 	printf("\nStarted\n");	
