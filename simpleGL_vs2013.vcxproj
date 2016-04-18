@@ -106,17 +106,15 @@
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Platform)'=='x64'">
     <Link>
-      <AdditionalDependencies>glew64.lib;cutil32.lib;cutil32D.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>glew64.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
     <CudaCompile Include="main.cu" />
-    <CudaCompile Include="simpleGL.cu" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Globals.cpp" />
     <ClCompile Include="LoadingFiles.cpp" />
-    <ClCompile Include="OpenGlFunc.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="Globals.h" />
