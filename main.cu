@@ -80,6 +80,7 @@ inline void gpuAssert(cudaError_t code, const char *file, int line, bool abort =
 	}
 }
 
+int isPaused = 0;
 
 unsigned int world_width;
 unsigned int world_height;
@@ -130,9 +131,12 @@ void displayFunc(void)
 
 void idleFunc()
 {
-	glutPostRedisplay();
-	std::chrono::milliseconds dur(1000 / FPS);
-	std::this_thread::sleep_for(dur);
+	if (!isPaused)
+	{
+		glutPostRedisplay();
+		std::chrono::milliseconds dur(1000 / FPS);
+		std::this_thread::sleep_for(dur);
+	}
 }
 void closeFunc()
 {
@@ -142,7 +146,17 @@ void closeFunc()
 	free(cells);
 	printf("Closed\n");
 }
-
+void keyboardFunc(unsigned char key, int x, int y)
+{
+	switch (key)
+	{
+	case 'p':
+		isPaused = isPaused == 0 ? 1 : 0;
+		break;
+	default:
+		break;
+	}
+}
 bool initGL(int *argc, char **argv)
 {
 	imageH = world_height;
@@ -190,6 +204,7 @@ bool initGL(int *argc, char **argv)
 	glutDisplayFunc(displayFunc);
 	glutIdleFunc(idleFunc);
 	glutCloseFunc(closeFunc);
+	glutKeyboardFunc(keyboardFunc);
 	return true;
 }//initgl
 
@@ -356,6 +371,8 @@ int main(int argc, char **argv)
 
 	initGL(&argc, argv);
 	printf("\nStarted\n");	
+	printf("Controls:\n");
+	printf("p - to pause/resume (after pausing to see next step click LPM)\n");
 
 	glutMainLoop();
 	printf("Ended\n");
