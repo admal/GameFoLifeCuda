@@ -4,7 +4,9 @@
 #define THREADS_PER_BLOCK 512
 #define FPS 15
 #define SCREEN_COVERAGE 10 //percent of screen covered by living cells
-
+#define STEP_SIZE 5
+#define MAX_WINDOW_WIDTH 1000
+#define MAX_WINDOW_HEIGHT 1000
 #endif
 
 /*

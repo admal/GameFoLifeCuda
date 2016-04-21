@@ -11,18 +11,10 @@
 ////////////////////////////////////////////////////////////////////////////
 
 /*
-    This example demonstrates how to use the Cuda OpenGL bindings to
-    dynamically modify a vertex buffer using a Cuda kernel.
-
-    The steps are:
-    1. Create an empty vertex buffer object (VBO)
-    2. Register the VBO with Cuda
-    3. Map the VBO for writing from Cuda
-    4. Run Cuda kernel to modify the vertex positions
-    5. Unmap the VBO
-    6. Render the results using OpenGL
-
-    Host code
+	Max dimensions of the world: 6000 x 5500
+	Parameters: Intel Core i5-2500K 3.30GHz
+				8GB RAM
+				NVIDIA GeForce GTX 560 Ti 
 */
 
 // includes, system
@@ -99,9 +91,12 @@ uchar4 *h_Src;
 //Size of displayed image
 int imageW, imageH;
 
-
+int offsetX = 0, offsetY = 0; //where camera starts rendering
+float scale = 1;
+float alreadyScaled = 1.2;
+float slow = 1;
 void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst);
-
+float milliseconds =1.0;
 
 ////////////////////////////////////////////////////////////////////////////////
 //OPENGL FUNCTIONS
@@ -109,11 +104,20 @@ void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, ucha
 void displayFunc(void)
 {
 	
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+
 	d_dst = NULL;
 
 	cudaGLMapBufferObject((void**)&d_dst, gl_PBO);
 
+	cudaEventRecord(start);
 	RunGameOfLifeKernel(d_icells, d_ocells, world_width, world_height, d_dst);
+	cudaEventRecord(stop);
+
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&milliseconds, start, stop);
 
 	cudaGLUnmapBufferObject(gl_PBO);
 
@@ -126,17 +130,22 @@ void displayFunc(void)
 	glTexCoord2f(0.0f, 2.0f);
 	glVertex2f(-1.0f, 3.0f);
 	glEnd();
+
+	glScalef(scale, scale, 1);
+	scale = 1;
 	glutSwapBuffers();
 } // displayFunc
 
 void idleFunc()
 {
-	if (!isPaused)
-	{
-		glutPostRedisplay();
-		std::chrono::milliseconds dur(1000 / FPS);
-		std::this_thread::sleep_for(dur);
-	}
+	glutPostRedisplay();
+	int toSleep = (1000 - (int)milliseconds) / FPS*slow;
+	int fps = 1000 / toSleep;
+	char buff[50];
+	sprintf(buff, "FPS: %i; X: %i; Y: %i; Slow: %.2f", fps, offsetX, offsetY, slow);
+	glutSetWindowTitle( buff);
+	std::chrono::milliseconds dur(toSleep);
+	std::this_thread::sleep_for(dur);
 }
 void closeFunc()
 {
@@ -153,14 +162,51 @@ void keyboardFunc(unsigned char key, int x, int y)
 	case 'p':
 		isPaused = isPaused == 0 ? 1 : 0;
 		break;
+	case 'w':
+			offsetY = (offsetY += STEP_SIZE)%world_width;
+		break;
+	case 's':
+		offsetY = (offsetY -= STEP_SIZE) % world_width;
+		break;
+	case 'a':
+			offsetX = (offsetX -= STEP_SIZE)%world_height;
+		break;
+	case 'd':	
+		offsetX = (offsetX += STEP_SIZE) % world_height;
+		break;
+	case 'm':
+		slow += 0.1;
+		break;
+	case 'n':
+		if (slow > 0.2)
+		{
+			slow -= 0.1;
+		}
+		
+		break;
+	//case 'z':
+	//	scale = 1.1;
+	//	alreadyScaled *= 1.1;
+	//	break;
+	//case 'x':
+	//	if (alreadyScaled > 1.2)
+	//	{
+	//		alreadyScaled *= 0.9;
+	//		scale = 0.9;
+	//	}
+			
 	default:
 		break;
 	}
 }
 bool initGL(int *argc, char **argv)
 {
-	imageH = world_height;
-	imageW = world_width;
+	imageH = MAX_WINDOW_HEIGHT;
+	imageW = MAX_WINDOW_WIDTH;
+	if (world_height <= MAX_WINDOW_HEIGHT)
+		imageH = world_height;
+	if (world_width <= MAX_WINDOW_WIDTH)
+		imageW = world_width;
 
 	glutInit(argc, argv);
 	glutInitDisplayMode(GLUT_RGBA | GLUT_DOUBLE);
@@ -248,18 +294,24 @@ __device__ int CountAliveCells(int *i_cells, int idx, int width, int height)
 	}
 	return alive;
 }
-__global__ void UpdateGrid(int *i_cells, int *o_cells, struct uchar4 *dst)
+__global__ void UpdateGrid(int offX, int offY ,int *i_cells, struct uchar4 *dst, int width, int height, int worldW, int worldH)
 {
-	int idx = blockDim.x * blockIdx.x + threadIdx.x;
-	i_cells[idx] = o_cells[idx];
+	int idx = blockDim.x * blockIdx.x + threadIdx.x; //position in visible grid
+	int posX =offX + idx%width;
+	int posY =offY + idx / width;
 
-	//assign color
-	dst[idx].x = i_cells[idx] * 255;
-	dst[idx].y = i_cells[idx] * 255;
-	dst[idx].z = i_cells[idx] * 255;
+
+	int cellIdx = posX*worldW + posY; //calc position of cell in grid
+	if ( idx < width*height)
+	{
+		//assign color
+		dst[idx].x = i_cells[cellIdx] * 255;
+		dst[idx].y = i_cells[cellIdx] * 255;
+		dst[idx].z = i_cells[cellIdx] * 255;
+	}
 }
 
-__global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int height, uchar4 *dst)
+__global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int height)
 {
 	int idx = blockDim.x * blockIdx.x + threadIdx.x;
 
@@ -278,16 +330,31 @@ __global__ void CalcNextGeneration(int *i_cells, int *o_cells, int width, int he
 	__syncthreads();
 
 }
+__global__ void SyncCells(int *i_cells, int *o_cells, int size)
+{
+	int idx = blockDim.x * blockIdx.x + threadIdx.x;
+	if (idx >= size)
+		return;
+	i_cells[idx] = o_cells[idx];
+}
 //end gpu functions
 
-void RunGameOfLifeKernel(int *i_cells, int *o_cells, int width, int height, uchar4* dst)
+void RunGameOfLifeKernel(int *i_cells, int *o_cells, int worldW, int worldH, uchar4* dst)
 {
-	int size = width*height;
+	int worldSize = worldW*worldH;
 	dim3 threads(THREADS_PER_BLOCK, 1, 1);
-	dim3 blocks(ceil(((float)size) / (float)(THREADS_PER_BLOCK)), 1, 1);
-	CalcNextGeneration<<<blocks, threads >>>(i_cells, o_cells, width, height, dst);
-	gpuErrchk(cudaGetLastError());
-	UpdateGrid << <blocks, threads >> >(i_cells, o_cells, dst);
+	dim3 blocks(ceil(((float)worldSize) / (float)(THREADS_PER_BLOCK)), 1, 1);
+	if (!isPaused)
+	{
+		CalcNextGeneration << <blocks, threads >> >(i_cells, o_cells, worldW, worldH);
+		gpuErrchk(cudaGetLastError());
+
+		SyncCells << <blocks, threads >> >(i_cells, o_cells, worldSize); //sync cells betweeen threads
+		gpuErrchk(cudaGetLastError());
+	}
+	dim3 threadsGrid(THREADS_PER_BLOCK, 1, 1);
+	dim3 blocksGrid(ceil(((float)imageW*imageH) / (float)(THREADS_PER_BLOCK)), 1, 1);
+	UpdateGrid << <blocksGrid, threadsGrid >> >(offsetX, offsetY, i_cells, dst, imageW, imageH, worldW, worldH); //draw stuff
 	gpuErrchk(cudaGetLastError());
 }
 
@@ -303,8 +370,8 @@ void initWorld(int gridWidth, int gridHeight, char* filename)
 
 	cells = (int*)calloc(world_width*world_height, sizeof(int));
 	//printCells(grid, gridWidth, gridHeight);
-	int offsetX = world_height / 2 - gridHeight / 2;
-	int offsetY = world_width / 2 - gridWidth / 2;
+	int offsetX = 0;// world_height / 2 - gridHeight / 2;
+	int offsetY = 0;// world_width / 2 - gridWidth / 2;
 
 	for (int i = 0; i < gridHeight; i++)
 	{
@@ -365,7 +432,7 @@ int main(int argc, char **argv)
 	}
 	printf("Cells grid created...\n");
 	gpuErrchk(cudaMalloc(&d_icells, size * sizeof(int)));
-	gpuErrchk(cudaMalloc(&d_ocells, size*sizeof(int)));
+	gpuErrchk(cudaMalloc(&d_ocells, size * sizeof(int)));
 	
 	gpuErrchk(cudaMemcpy(d_icells, cells, size*sizeof(int), cudaMemcpyHostToDevice));
 
