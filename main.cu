@@ -189,11 +189,8 @@ void keyboardFunc(unsigned char key, int x, int y)
 	//	alreadyScaled *= 1.1;
 	//	break;
 	//case 'x':
-	//	if (alreadyScaled > 1.2)
-	//	{
-	//		alreadyScaled *= 0.9;
-	//		scale = 0.9;
-	//	}
+	//	alreadyScaled *= 0.9;
+	//	scale = 0.9;
 			
 	default:
 		break;
@@ -439,7 +436,12 @@ int main(int argc, char **argv)
 	initGL(&argc, argv);
 	printf("\nStarted\n");	
 	printf("Controls:\n");
-	printf("p - to pause/resume (after pausing to see next step click LPM)\n");
+	printf("p - to pause/resume\n");
+	printf("w/s/a/d - to move on the map\n");
+	printf("m - slow animation\n");
+	printf("n - speed up animation\n");
+	//printf("z - zoom out\n");
+	//printf("x - zoom in\n");
 
 	glutMainLoop();
 	printf("Ended\n");
